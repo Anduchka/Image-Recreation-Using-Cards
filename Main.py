@@ -1,20 +1,21 @@
 from PIL import Image
 import random
 import numpy as np
-from skimage.metrics import structural_similarity as ssim
 
 from CardDeck import cards
 
 CARD_STANDART_WIDTH = 200
 CARD_STANDART_HEIGHT = 300
+CARD_SMALL_WIDTH = 33
+CARD_SMALL_HEIGHT = 50
 MAX_CARD_SIZE = 3.5
-MIN_CARD_SIZE = 0.1
+MIN_CARD_SIZE = 0.08
 
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
-#asdasdasd
-SCORE_CANVAS_WIDTH = 240
-SCORE_CANVAS_HEIGHT = 137
+
+SCORE_CANVAS_WIDTH = 320
+SCORE_CANVAS_HEIGHT = 180
 
 TARGET_PATH = "target.png"
 
@@ -38,10 +39,12 @@ target_full = target_full.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.LANCZOS)
 
 target_small = target_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
 target_small_arr = np.asarray(target_small, dtype=np.float32)
-target_gray_arr = np.asarray(target_small.convert("L"), dtype=np.float32)
+
+ERROR_WEIGHT_ARR = None
+ERROR_FOCUS_STRENGTH = 6.0
 
 CARD_IMAGES = {}
-SCORE_CANVAS = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 255))
+SCORE_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 255))
 
 def createRandomCard():
     random_card_no = random.randrange(1, len(cards) + 1)
@@ -67,6 +70,19 @@ def placeCard(canvas, card):
     img = img.rotate(card["rotation"], expand=True)
     
     canvas.paste(img, card["position"], img)
+
+def placeSmallCard(canvas, card):
+    base = CARD_IMAGES[card["card_no"]].copy()
+    
+    img = applyTint(base, card["tint"])
+    
+    img = img.resize((int(CARD_SMALL_WIDTH * card["scale"]), int(CARD_SMALL_HEIGHT * card["scale"])), Image.LANCZOS)
+    img = img.rotate(card["rotation"], expand=True)
+    
+    sx = int(card["position"][0] / 6)
+    sy = int(card["position"][1] / 6)
+    
+    canvas.paste(img, (sx, sy), img)
     
 def renderOnCanvas(card_list, canvas):
     
@@ -74,6 +90,15 @@ def renderOnCanvas(card_list, canvas):
         placeCard(canvas, card)
     
     return canvas.convert("RGB")
+
+def renderOnSmallCanvas(card_list, canvas):
+    canvas.paste((0, 0, 0, 255), [0, 0, SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT])
+    
+    for card in card_list:
+        placeSmallCard(canvas, card)
+    
+    return canvas.convert("RGB")
+    
 
 def applyTint(img, tint):
     r, g, b = tint
@@ -140,29 +165,43 @@ def ClampCardPosition(card):
     
     return card
 
-def calculateFitness(card_list):
-    SCORE_CANVAS.paste((0, 0, 0, 255), [0, 0, CANVAS_WIDTH, CANVAS_HEIGHT])
+def calculateFitness(small_canvas, card):
     
-    candidate_full = renderOnCanvas(card_list, SCORE_CANVAS)
+    cand_small = small_canvas.copy()
     
-    cand_small = candidate_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
+    placeSmallCard(cand_small, card)
     cand_small_arr = np.asarray(cand_small, dtype=np.float32)
-    cand_gray_arr = np.asarray(cand_small.convert("L"), dtype=np.float32)
     
-    ssim_val = ssim(target_gray_arr, cand_gray_arr, data_range=255)
     diff = cand_small_arr - target_small_arr
-    mse = np.mean(diff ** 2)
+    sq = diff ** 2
+    
+    if ERROR_WEIGHT_ARR is not None:
+        sq *= ERROR_WEIGHT_ARR
+    
+    mse = np.mean(sq)
     
     color_score = 1.0 / (1.0 + mse / 5000.0)
     
-    W_SSIM = 0.5
-    W_COLOR = 0.5
-    
-    fitness = W_SSIM * ssim_val + W_COLOR * color_score
-    
-    return fitness
+    return color_score
 
 def generationLoop(card_list):
+    global ERROR_WEIGHT_ARR
+    
+    curent_small_canvas = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 255))
+    curent_small_canvas = renderOnSmallCanvas(card_list, curent_small_canvas)
+    curent_small_canvas_arr = np.asarray(curent_small_canvas, dtype=np.float32)
+    
+    difference = curent_small_canvas_arr - target_small_arr
+    error = np.mean(difference ** 2, axis=2)
+    
+    max_error = np.max(error)
+    if max_error > 0:
+        normalized_error = error / max_error
+    else:
+        normalized_error = error
+    
+    ERROR_WEIGHT_ARR = 1.0 + ERROR_FOCUS_STRENGTH * normalized_error[..., np.newaxis]
+    
     generation_cards = []
     
     for i in range(CARDS_TOTAL_COUNT):
@@ -172,10 +211,7 @@ def generationLoop(card_list):
         fitness_scores = {}
         
         for card_no in range(len(generation_cards)):
-            base_cards = card_list.copy()
-            base_cards.append(generation_cards[card_no])
-            
-            fitness = calculateFitness(base_cards)
+            fitness = calculateFitness(curent_small_canvas, generation_cards[card_no])
             fitness_scores[card_no] = fitness
         
         sorted_scores = sorted(fitness_scores.items(), key=lambda item: item[1], reverse=True)
@@ -208,11 +244,12 @@ def mainLoop():
         new_card = generationLoop(card_list)
         card_list.append(new_card)
         
-        temp_saving = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 255))
-        for card in card_list:
-            placeCard(temp_saving, card)
+        if count % 5 == 0:
+            temp_saving = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 255))
+            for card in card_list:
+                placeCard(temp_saving, card)
         
-        temp_saving.save("Results\\temp_save" + str(count) + ".png")
+            temp_saving.save("Results\\temp_save" + str(count) + ".png")
     
     result_canvas = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 255))
     for card in card_list:
