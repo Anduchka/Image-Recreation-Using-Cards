@@ -25,14 +25,17 @@ CARDS_WINNERS_COUNT = 20
 
 GENERATIONS_PER_LOOP = 20
 
-MAX_LOOP_COUNT = 10000
+MAX_LOOP_COUNT = 2000
 
 MUTATE_CARD_PROBABILITY = 0.35
 MUTATE_SIZE_POWER = 0.15
 MUTATE_ROTATION_POWER = 20
 MUTATE_POSITION_POWER = 30
 MUTATE_COLOR_POWER = 25
+MUTATE_TINT_POWER = 0.03
 
+TINT_POWER_MIN = 0.7
+TINT_POWER_MAX = 0.9
 
 target_full = Image.open(TARGET_PATH).convert("RGB")
 target_full = target_full.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.LANCZOS)
@@ -40,11 +43,9 @@ target_full = target_full.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.LANCZOS)
 target_small = target_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
 target_small_arr = np.asarray(target_small, dtype=np.float32)
 
-ERROR_WEIGHT_ARR = None
-ERROR_FOCUS_STRENGTH = 6.0
-
 CARD_IMAGES = {}
-SCORE_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 255))
+
+SMALL_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 0))
 
 def createRandomCard():
     random_card_no = random.randrange(1, len(cards) + 1)
@@ -54,7 +55,8 @@ def createRandomCard():
         "rotation": random.uniform(0, -360),
         "scale": random.uniform(MIN_CARD_SIZE, MAX_CARD_SIZE),
         "position": (random.randrange(-CARD_STANDART_WIDTH, CANVAS_WIDTH), random.randrange(-CARD_STANDART_HEIGHT, CANVAS_HEIGHT)),
-        "tint": (255 + random.randrange(-40, 0), 255 + random.randrange(-40, 0), 255 + random.randrange(-40, 0))
+        "tint": (random.randrange(0, 255), random.randrange(0, 255), random.randrange(0, 255)),
+        "tint_power": random.uniform(TINT_POWER_MIN, TINT_POWER_MAX)
     }
     
     new_card = ClampCardPosition(new_card)
@@ -64,7 +66,7 @@ def createRandomCard():
 def placeCard(canvas, card):
     base = CARD_IMAGES[card["card_no"]].copy()
     
-    img = applyTint(base, card["tint"])
+    img = applyTint(base, card["tint"], card["tint_power"])
     
     img = img.resize((int(CARD_STANDART_WIDTH * card["scale"]), int(CARD_STANDART_HEIGHT * card["scale"])), Image.LANCZOS)
     img = img.rotate(card["rotation"], expand=True)
@@ -74,7 +76,7 @@ def placeCard(canvas, card):
 def placeSmallCard(canvas, card):
     base = CARD_IMAGES[card["card_no"]].copy()
     
-    img = applyTint(base, card["tint"])
+    img = applyTint(base, card["tint"], card["tint_power"])
     
     img = img.resize((int(CARD_SMALL_WIDTH * card["scale"]), int(CARD_SMALL_HEIGHT * card["scale"])), Image.LANCZOS)
     img = img.rotate(card["rotation"], expand=True)
@@ -90,28 +92,23 @@ def renderOnCanvas(card_list, canvas):
         placeCard(canvas, card)
     
     return canvas.convert("RGB")
-
-def renderOnSmallCanvas(card_list, canvas):
-    canvas.paste((0, 0, 0, 255), [0, 0, SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT])
-    
-    for card in card_list:
-        placeSmallCard(canvas, card)
-    
-    return canvas.convert("RGB")
     
 
-def applyTint(img, tint):
-    r, g, b = tint
-    
-    new_img = Image.new("RGBA", img.size, (r, g, b, 255))
-    
+def applyTint(img, tint, tint_power):
     if img.mode != "RGBA":
         img = img.convert("RGBA")
     
-    alpha = img.split()[3]
-    new_img.putalpha(alpha)
+    r, g, b = tint
     
-    return new_img
+    tint_img = Image.new("RGBA", img.size, (r, g, b, 255))
+    
+    blended_rgb = Image.blend(img.convert("RGB"), tint_img.convert("RGB"), tint_power)
+    
+    alpha = img.split()[3]
+    blended = blended_rgb.convert("RGBA")
+    blended.putalpha(alpha)
+    
+    return blended
 
 def mutateCard(card, return_count=CARDS_MUTATIONS_COUNT):
     new_cards = []
@@ -146,6 +143,12 @@ def mutateCard(card, return_count=CARDS_MUTATIONS_COUNT):
         
         new_card["tint"] = (r, g, b)
         
+        tint_power = card["tint_power"]
+        tint_power += random.uniform(-MUTATE_TINT_POWER, MUTATE_SIZE_POWER)
+        tint_power = max(TINT_POWER_MIN, min(TINT_POWER_MAX, tint_power))
+        
+        new_card["tint_power"] = tint_power
+        
         new_card = ClampCardPosition(new_card)
         
         new_cards.append(new_card)
@@ -165,19 +168,16 @@ def ClampCardPosition(card):
     
     return card
 
-def calculateFitness(small_canvas, card):
-    
-    cand_small = small_canvas.copy()
-    
+
+def calculateFitness(card):
+    cand_small = SMALL_CANVAS.copy()
     placeSmallCard(cand_small, card)
-    cand_small_arr = np.asarray(cand_small, dtype=np.float32)
+    
+    cand_small_rgb = cand_small.convert("RGB")
+    cand_small_arr = np.asarray(cand_small_rgb, dtype=np.float32)
     
     diff = cand_small_arr - target_small_arr
     sq = diff ** 2
-    
-    if ERROR_WEIGHT_ARR is not None:
-        sq *= ERROR_WEIGHT_ARR
-    
     mse = np.mean(sq)
     
     color_score = 1.0 / (1.0 + mse / 5000.0)
@@ -185,22 +185,6 @@ def calculateFitness(small_canvas, card):
     return color_score
 
 def generationLoop(card_list):
-    global ERROR_WEIGHT_ARR
-    
-    curent_small_canvas = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 255))
-    curent_small_canvas = renderOnSmallCanvas(card_list, curent_small_canvas)
-    curent_small_canvas_arr = np.asarray(curent_small_canvas, dtype=np.float32)
-    
-    difference = curent_small_canvas_arr - target_small_arr
-    error = np.mean(difference ** 2, axis=2)
-    
-    max_error = np.max(error)
-    if max_error > 0:
-        normalized_error = error / max_error
-    else:
-        normalized_error = error
-    
-    ERROR_WEIGHT_ARR = 1.0 + ERROR_FOCUS_STRENGTH * normalized_error[..., np.newaxis]
     
     generation_cards = []
     
@@ -211,7 +195,7 @@ def generationLoop(card_list):
         fitness_scores = {}
         
         for card_no in range(len(generation_cards)):
-            fitness = calculateFitness(curent_small_canvas, generation_cards[card_no])
+            fitness = calculateFitness(generation_cards[card_no])
             fitness_scores[card_no] = fitness
         
         sorted_scores = sorted(fitness_scores.items(), key=lambda item: item[1], reverse=True)
@@ -244,6 +228,8 @@ def mainLoop():
         new_card = generationLoop(card_list)
         card_list.append(new_card)
         
+        placeSmallCard(SMALL_CANVAS, new_card)
+        
         if count % 5 == 0:
             temp_saving = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 255))
             for card in card_list:
@@ -259,8 +245,6 @@ def mainLoop():
     result_canvas.save("Results\\result.png")
 
 def loadCards():
-    global CARD_IMAGES
-    
     for id in cards.keys():
         CARD_IMAGES[id] = Image.open("Deck\\" + cards[id]).convert("RGBA")
 
