@@ -14,6 +14,8 @@ MIN_CARD_SIZE = 0.08
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 
+IMAGE_SIMPLIFICATION = 6
+
 SCORE_CANVAS_WIDTH = 320
 SCORE_CANVAS_HEIGHT = 180
 
@@ -37,15 +39,13 @@ MUTATE_TINT_POWER = 0.03
 TINT_POWER_MIN = 0.7
 TINT_POWER_MAX = 0.9
 
-target_full = Image.open(TARGET_PATH).convert("RGB")
-target_full = target_full.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.LANCZOS)
+target_full = None 
 
-target_small = target_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
-target_small_arr = np.asarray(target_small, dtype=np.float32)
+target_small = None 
+target_small_arr = None 
 
 CARD_IMAGES = {}
-
-SMALL_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 0))
+SMALL_CANVAS = None
 
 def createRandomCard():
     random_card_no = random.randrange(1, len(cards) + 1)
@@ -81,8 +81,8 @@ def placeSmallCard(canvas, card):
     img = img.resize((int(CARD_SMALL_WIDTH * card["scale"]), int(CARD_SMALL_HEIGHT * card["scale"])), Image.LANCZOS)
     img = img.rotate(card["rotation"], expand=True)
     
-    sx = int(card["position"][0] / 6)
-    sy = int(card["position"][1] / 6)
+    sx = int(card["position"][0] / IMAGE_SIMPLIFICATION)
+    sy = int(card["position"][1] / IMAGE_SIMPLIFICATION)
     
     canvas.paste(img, (sx, sy), img)
     
@@ -184,7 +184,7 @@ def calculateFitness(card):
     
     return color_score
 
-def generationLoop(card_list):
+def generationLoop(count, progress_callback, stop_event):
     
     generation_cards = []
     
@@ -192,6 +192,9 @@ def generationLoop(card_list):
         generation_cards.append(createRandomCard())
     
     for g in range(GENERATIONS_PER_LOOP):
+        if stop_event is not None and stop_event.is_set():
+            return generation_cards[0]
+        
         fitness_scores = {}
         
         for card_no in range(len(generation_cards)):
@@ -208,14 +211,17 @@ def generationLoop(card_list):
             best_100_cards.append(generation_cards[k])
             
         generation_cards = best_100_cards.copy()
-        print("Generation:", g)
+        
+        if progress_callback is not None:
+            progress_callback(count, g, best_100_scores[0][1])
+        
         if g < GENERATIONS_PER_LOOP - 1:
             for card in best_100_cards:
                 generation_cards.extend(mutateCard(card, CARDS_MUTATIONS_COUNT))
     
     return generation_cards[0]
 
-def mainLoop():
+def mainLoop(progress_callback=None, stop_event=None):
     card_list = []
     
     count = 0;
@@ -223,9 +229,14 @@ def mainLoop():
     while count < MAX_LOOP_COUNT:
         count += 1
         
-        print("Loop count:", count)
+        if progress_callback is not None:
+            progress_callback(count, 0, -1)
         
-        new_card = generationLoop(card_list)
+        new_card = generationLoop(count, progress_callback, stop_event)
+        
+        if stop_event is not None and stop_event.is_set():
+            return         
+        
         card_list.append(new_card)
         
         placeSmallCard(SMALL_CANVAS, new_card)
@@ -248,5 +259,37 @@ def loadCards():
     for id in cards.keys():
         CARD_IMAGES[id] = Image.open("Deck\\" + cards[id]).convert("RGBA")
 
-loadCards()
-mainLoop()
+def runEvolution(
+    loops=MAX_LOOP_COUNT,
+    generations_per_loop=GENERATIONS_PER_LOOP,
+    image_simplification=IMAGE_SIMPLIFICATION,
+    target_path=TARGET_PATH,
+    progress_callback=None,
+    stop_event=None
+):
+    
+    global MAX_LOOP_COUNT, GENERATIONS_PER_LOOP, IMAGE_SIMPLIFICATION, TARGET_PATH
+    global CANVAS_WIDTH, CANVAS_HEIGHT, SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT, CARD_SMALL_WIDTH, CARD_SMALL_HEIGHT, SMALL_CANVAS
+    global target_full, target_small, target_small_arr
+    
+    MAX_LOOP_COUNT = loops
+    GENERATIONS_PER_LOOP = generations_per_loop
+    IMAGE_SIMPLIFICATION = image_simplification
+    TARGET_PATH = target_path
+
+    target_full = Image.open(TARGET_PATH).convert("RGB")
+    
+    CANVAS_WIDTH, CANVAS_HEIGHT = target_full.size
+    SCORE_CANVAS_WIDTH = int(CANVAS_WIDTH / IMAGE_SIMPLIFICATION)
+    SCORE_CANVAS_HEIGHT = int(CANVAS_HEIGHT / IMAGE_SIMPLIFICATION)
+    
+    target_small = target_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
+    target_small_arr = np.asarray(target_small, dtype=np.float32)
+    
+    CARD_SMALL_WIDTH = int(CARD_STANDART_WIDTH / IMAGE_SIMPLIFICATION)
+    CARD_SMALL_HEIGHT = int(CARD_STANDART_HEIGHT / IMAGE_SIMPLIFICATION)
+    
+    SMALL_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 0))
+
+    loadCards()
+    mainLoop(progress_callback, stop_event)
