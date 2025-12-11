@@ -1,6 +1,7 @@
 from PIL import Image
 import random
 import numpy as np
+from skimage.metrics import structural_similarity as ssim
 
 from CardDeck import cards
 
@@ -39,10 +40,14 @@ MUTATE_TINT_POWER = 0.03
 TINT_POWER_MIN = 0.7
 TINT_POWER_MAX = 0.9
 
+WEIGHT_SSIM = 0.6
+WEIGHT_COLOR = 0.4
+
 target_full = None 
 
 target_small = None 
-target_small_arr = None 
+target_small_arr = None
+target_gray_arr = None
 
 CARD_IMAGES = {}
 SMALL_CANVAS = None
@@ -175,6 +180,9 @@ def calculateFitness(card):
     
     cand_small_rgb = cand_small.convert("RGB")
     cand_small_arr = np.asarray(cand_small_rgb, dtype=np.float32)
+    cand_gray_arr = np.asarray(cand_small.convert("L"), dtype=np.float32)
+    
+    ssim_val = ssim(target_gray_arr, cand_gray_arr, data_range=255)
     
     diff = cand_small_arr - target_small_arr
     sq = diff ** 2
@@ -182,7 +190,7 @@ def calculateFitness(card):
     
     color_score = 1.0 / (1.0 + mse / 5000.0)
     
-    return color_score
+    return color_score * WEIGHT_COLOR + ssim_val * WEIGHT_SSIM
 
 def generationLoop(count, progress_callback, stop_event):
     
@@ -263,20 +271,24 @@ def runEvolution(
     loops=MAX_LOOP_COUNT,
     generations_per_loop=GENERATIONS_PER_LOOP,
     image_simplification=IMAGE_SIMPLIFICATION,
+    weight_color=WEIGHT_COLOR,
+    weight_ssim=WEIGHT_SSIM,
     target_path=TARGET_PATH,
     progress_callback=None,
     stop_event=None
 ):
     
-    global MAX_LOOP_COUNT, GENERATIONS_PER_LOOP, IMAGE_SIMPLIFICATION, TARGET_PATH
+    global MAX_LOOP_COUNT, GENERATIONS_PER_LOOP, IMAGE_SIMPLIFICATION, TARGET_PATH, WEIGHT_COLOR, WEIGHT_SSIM
     global CANVAS_WIDTH, CANVAS_HEIGHT, SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT, CARD_SMALL_WIDTH, CARD_SMALL_HEIGHT, SMALL_CANVAS
-    global target_full, target_small, target_small_arr
-    
+    global target_full, target_small, target_small_arr, target_gray_arr
+   
     MAX_LOOP_COUNT = loops
     GENERATIONS_PER_LOOP = generations_per_loop
     IMAGE_SIMPLIFICATION = image_simplification
+    WEIGHT_COLOR = weight_color
+    WEIGHT_SSIM = weight_ssim
     TARGET_PATH = target_path
-
+     
     target_full = Image.open(TARGET_PATH).convert("RGB")
     
     CANVAS_WIDTH, CANVAS_HEIGHT = target_full.size
@@ -285,11 +297,12 @@ def runEvolution(
     
     target_small = target_full.resize((SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), Image.LANCZOS)
     target_small_arr = np.asarray(target_small, dtype=np.float32)
+    target_gray_arr = np.asarray(target_small.convert("L"), dtype=np.float32)
     
     CARD_SMALL_WIDTH = int(CARD_STANDART_WIDTH / IMAGE_SIMPLIFICATION)
     CARD_SMALL_HEIGHT = int(CARD_STANDART_HEIGHT / IMAGE_SIMPLIFICATION)
     
     SMALL_CANVAS = Image.new("RGBA", (SCORE_CANVAS_WIDTH, SCORE_CANVAS_HEIGHT), (0, 0, 0, 0))
-
+    
     loadCards()
     mainLoop(progress_callback, stop_event)

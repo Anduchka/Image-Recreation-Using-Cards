@@ -23,6 +23,8 @@ def start():
             loops = int(loops_def.get())
             generations_per_loop = int(generations_per_loop_def.get())
             image_simplification = int(image_simplification_def.get())
+            weight_color = int(weight_color_def.get()) / 100.0
+            weight_ssim = int(weight_ssim_def.get()) / 100.0
         except ValueError:
             messagebox.showerror("Error", "All values must be integers")
             return
@@ -32,7 +34,7 @@ def start():
         stop_button.config(state="normal")
         progress_def.set("Running...")
         
-        t = threading.Thread(target=runEvolution, args=(loops, generations_per_loop, image_simplification, target_path_def.get()))
+        t = threading.Thread(target=runEvolution, args=(loops, generations_per_loop, image_simplification, weight_color, weight_ssim, target_path_def.get()))
         t.daemon = True
         t.start()
     
@@ -41,7 +43,7 @@ def start():
         run_button.config(state="normal")
         stop_button.config(state="disabled")
     
-    def runEvolution(loops, generations_per_loop, image_simplification, target_path):
+    def runEvolution(loops, generations_per_loop, image_simplification, weight_color, weight_ssim, target_path):
         current_fitness = 0.0
         
         def progressCallback(loop, generation, best_fitness):
@@ -60,6 +62,8 @@ def start():
                 loops=loops,
                 generations_per_loop=generations_per_loop,
                 image_simplification=image_simplification,
+                weight_color=weight_color,
+                weight_ssim=weight_ssim,
                 target_path=target_path,
                 progress_callback=progressCallback,
                 stop_event=stop_event)
@@ -83,6 +87,8 @@ def start():
     generations_per_loop_def = tk.StringVar(value=str(Main.GENERATIONS_PER_LOOP))
     image_simplification_def = tk.StringVar(value=str(Main.IMAGE_SIMPLIFICATION))
     target_path_def = tk.StringVar(value=str(Main.TARGET_PATH))
+    weight_ssim_def = tk.StringVar(value=str(int(Main.WEIGHT_SSIM * 100)))
+    weight_color_def = tk.StringVar(value=str(int(Main.WEIGHT_COLOR * 100)))
     progress_def = tk.StringVar(value="None")
     
     row = 0
@@ -101,6 +107,16 @@ def start():
     row += 1
     tk.Label(root, text="Simplification ammount:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
     tk.Entry(root, textvariable=image_simplification_def, width=10).grid(row=row, column=1, padx=5, pady=5)
+    
+    row += 1
+    tk.Label(root, text="Color weight:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
+    tk.Entry(root, textvariable=weight_color_def, width=10).grid(row=row, column=1, padx=5, pady=5)
+    tk.Label(root, text="%").grid(row=row, column=1, sticky="e", padx=5, pady=5)
+    
+    row += 1
+    tk.Label(root, text="SSIM weight:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
+    tk.Entry(root, textvariable=weight_ssim_def, width=10).grid(row=row, column=1, padx=5, pady=5)
+    tk.Label(root, text="%").grid(row=row, column=1, sticky="e", padx=5, pady=5)
     
     row+=1
     run_button = tk.Button(root, text="Run simulation", command=onRun)
