@@ -53,4 +53,5 @@ cards = {
     52: "spades_jack.png",
     53: "spades_king.png",
     54: "spades_queen.png"
-}
+    
+    }
