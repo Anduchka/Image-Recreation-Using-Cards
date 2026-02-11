@@ -13,6 +13,7 @@ from PIL import Image
 import random
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from CardDeck import cards
 
@@ -47,6 +48,11 @@ CARDS_WINNERS_COUNT = 20
 GENERATIONS_PER_LOOP = 20
 
 MAX_LOOP_COUNT = 2000
+
+#threading settings, must follow the rule:
+#SCORE_WORKERS * SCORE_CHUNK = CARDS_TOTAL_COUNT
+SCORE_WORKERS = 5
+SCORE_CHUNK = 20
 
 #power of mutations per new generation
 MUTATE_CARD_PROBABILITY = 0.35
@@ -88,7 +94,7 @@ def createRandomCard(): #function for creating random card
         "tint_power": random.uniform(TINT_POWER_MIN, TINT_POWER_MAX)
     }
     
-    new_card = ClampCardPosition(new_card)
+    new_card = clampCardPosition(new_card)
     
     return new_card
 
@@ -180,13 +186,13 @@ def mutateCard(card, return_count=CARDS_MUTATIONS_COUNT): #mutating n cards from
         
         new_card["tint_power"] = tint_power
         
-        new_card = ClampCardPosition(new_card)
+        new_card = clampCardPosition(new_card)
         
         new_cards.append(new_card)
     
     return new_cards
 
-def ClampCardPosition(card): #clamp card positon
+def clampCardPosition(card): #clamp card positon
     
     #> Function needs fixing because rotation is not taken into an account which creates some problems of uneven distribution <#
     
@@ -195,8 +201,8 @@ def ClampCardPosition(card): #clamp card positon
     w = (CARD_STANDART_WIDTH * card["scale"])
     h = (CARD_STANDART_HEIGHT * card["scale"])
     
-    x = max(0, min(CANVAS_WIDTH - w, x))
-    y = max(0, min(CANVAS_HEIGHT - h, y))
+    x = max(-10, min(CANVAS_WIDTH - w, x))
+    y = max(-10, min(CANVAS_HEIGHT - h, y))
     
     card["position"] = (int(x), int(y))
     
@@ -241,9 +247,24 @@ def generationLoop(count, progress_callback, stop_event): #Loop of n generations
         
         fitness_scores = {}
         
-        for card_no in range(len(generation_cards)): #create scores for cards
-            fitness = calculateFitness(generation_cards[card_no])
-            fitness_scores[card_no] = fitness
+        def _score_one(idx):
+            return idx, calculateFitness(generation_cards[idx])
+        
+        with ThreadPoolExecutor(max_workers=SCORE_WORKERS) as ex: #do scoring in threads
+            for start in range(0, len(generation_cards), SCORE_CHUNK):
+                if stop_event is not None and stop_event.is_set():
+                    return generation_cards[0]
+                
+                futures = [
+                    ex.submit(_score_one, i)
+                    for i in range(start, min(start + SCORE_CHUNK, len(generation_cards)))
+                ]
+                
+                for fut in as_completed(futures):
+                    if stop_event is not None and stop_event.is_set():
+                        return generation_cards[0]
+                    idx, fit = fut.result()
+                    fitness_scores[idx] = fit
         
         sorted_scores = sorted(fitness_scores.items(), key=lambda item: item[1], reverse=True) #sort cards best to worst
         
