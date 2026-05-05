@@ -4,7 +4,6 @@ Recreates images by layering playing card sprites and improving the result over 
 The fitness score is based on pixel color difference and SSIM (Structural Similarity).
 
 <img width="2560" height="1707" alt="temp_save535" src="https://github.com/user-attachments/assets/5ee72ff1-5de5-4200-8db3-e88ac03b5588" />
-[video(8).webm](https://github.com/user-attachments/assets/5257885d-0263-40cf-bf3d-906fa61ae2e7)
 
 ## How it works
 1. Start with a blank canvas.
